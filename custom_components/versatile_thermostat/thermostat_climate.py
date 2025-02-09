@@ -220,7 +220,24 @@ class ThermostatOverClimate(BaseThermostat[UnderlyingClimate]):
             new_regulated_temp = self.target_temperature
         dtemp = new_regulated_temp - self._regulated_target_temp
 
-        if not force and abs(dtemp) < self._auto_regulation_dtemp:
+
+        offset_temps = [0] * len(self._underlyings)
+        dtemp_underlyings = [dtemp] * len(self._underlyings)
+        for index, under in enumerate(self._underlyings):
+            if (
+                # current_temperature is set
+                self.current_temperature is not None
+                # regulation can use the device_temp
+                and self.auto_regulation_use_device_temp
+                # and we have access to the device temp
+                and (device_temp := under.underlying_current_temperature) is not None
+            ):
+                offset_temp = device_temp - self.current_temperature
+                offset_temps[index] = offset_temp
+                dtemp_underlyings[index] = new_regulated_temp + offset_temp - under.underlying_target_temperature
+
+
+        if not force and abs(dtemp) < self._auto_regulation_dtemp and all(abs(dtemp) < self._auto_regulation_dtemp for dtemp in dtemp_underlyings):
             _LOGGER.info(
                 "%s - dtemp (%.1f) is < %.1f -> forget the regulation send",
                 self,
@@ -237,27 +254,14 @@ class ThermostatOverClimate(BaseThermostat[UnderlyingClimate]):
         )
 
         self._last_regulation_change = self.now
-        for under in self._underlyings:
-            # issue 348 - use device temperature if configured as offset
-            offset_temp = 0
-            device_temp = 0
-            if (
-                # current_temperature is set
-                self.current_temperature is not None
-                # regulation can use the device_temp
-                and self.auto_regulation_use_device_temp
-                # and we have access to the device temp
-                and (device_temp := under.underlying_current_temperature) is not None
-            ):
-                offset_temp = device_temp - self.current_temperature
-
-            target_temp = round_to_nearest(self.regulated_target_temp + offset_temp, regulation_step)
+        for index, under in enumerate(self._underlyings):
+            target_temp = round_to_nearest(self.regulated_target_temp + offset_temps[index], regulation_step)
 
             _LOGGER.debug(
                 "%s - The device offset temp for regulation is %.2f - internal temp is %.2f. New target is %.2f",
                 self,
-                offset_temp,
-                device_temp,
+                offset_temps[index],
+                under.underlying_current_temperature,
                 target_temp,
             )
 
